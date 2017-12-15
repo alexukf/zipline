@@ -54,7 +54,6 @@ from zipline.data.history_loader import (
     MinuteHistoryLoader,
 )
 from zipline.data.us_equity_pricing import NoDataOnDate
-
 from zipline.utils.math_utils import (
     nansum,
     nanmean,
@@ -155,6 +154,7 @@ class DataPortal(object):
                  daily_history_prefetch_length=_DEF_D_HIST_PREFETCH):
 
         self.trading_calendar = trading_calendar
+
         self.asset_finder = asset_finder
 
         self._adjustment_reader = adjustment_reader
@@ -1374,7 +1374,9 @@ class DataPortal(object):
         Retrieves the future chain for the contract at the given `dt` according
         the `continuous_future` specification.
 
-        Returns:
+        Returns
+        -------
+
         future_chain : list[Future]
             A list of active futures, where the first index is the current
             contract specified by the continuous future definition, the second

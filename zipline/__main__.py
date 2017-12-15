@@ -2,7 +2,6 @@ import errno
 import os
 
 from importlib import import_module
-from functools import wraps
 
 import click
 import logbook
@@ -12,6 +11,8 @@ from six import text_type
 import pkgutil
 
 from zipline.data import bundles as bundles_module
+from zipline.utils.calendars.calendar_utils import get_calendar
+from zipline.utils.compat import wraps
 from zipline.utils.cli import Date, Timestamp
 from zipline.utils.run_algo import _run, load_extensions
 from zipline.gens import brokers
@@ -143,7 +144,7 @@ def ipython_only(option):
 @click.option(
     '-b',
     '--bundle',
-    default='quantopian-quandl',
+    default='quandl',
     metavar='BUNDLE-NAME',
     show_default=True,
     help='The data bundle to use for the simulation.',
@@ -176,6 +177,12 @@ def ipython_only(option):
     show_default=True,
     help="The location to write the perf data. If this is '-' the perf will"
     " be written to stdout.",
+)
+@click.option(
+    '--trading-calendar',
+    metavar='TRADING-CALENDAR',
+    default='NYSE',
+    help="The calendar you want to use e.g. LSE. NYSE is the default."
 )
 @click.option(
     '--print-algo/--no-print-algo',
@@ -230,6 +237,7 @@ def run(ctx,
         start,
         end,
         output,
+        trading_calendar,
         print_algo,
         local_namespace,
         broker,
@@ -292,6 +300,8 @@ def run(ctx,
             " '-t' / '--algotext'",
         )
 
+    trading_calendar = get_calendar(trading_calendar)
+
     perf = _run(
         initialize=None,
         handle_data=None,
@@ -308,6 +318,7 @@ def run(ctx,
         start=start,
         end=end,
         output=output,
+        trading_calendar=trading_calendar,
         print_algo=print_algo,
         local_namespace=local_namespace,
         environ=os.environ,
@@ -361,7 +372,7 @@ def zipline_magic(line, cell=None):
 @click.option(
     '-b',
     '--bundle',
-    default='quantopian-quandl',
+    default='quandl',
     metavar='BUNDLE-NAME',
     show_default=True,
     help='The data bundle to ingest.',
@@ -393,7 +404,7 @@ def ingest(bundle, assets_version, show_progress):
 @click.option(
     '-b',
     '--bundle',
-    default='quantopian-quandl',
+    default='quandl',
     metavar='BUNDLE-NAME',
     show_default=True,
     help='The data bundle to clean.',

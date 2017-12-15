@@ -13,13 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
-from collections import OrderedDict
 
 import logbook
 import pandas as pd
-from pandas_datareader.data import DataReader
-import pytz
-from six import iteritems
 from six.moves.urllib_error import HTTPError
 
 from .benchmarks import get_benchmark_returns
@@ -28,8 +24,8 @@ from ..utils.paths import (
     cache_root,
     data_root,
 )
-from ..utils.deprecate import deprecated
 from zipline.utils.calendars import get_calendar
+
 
 logger = logbook.Logger('Loader')
 
@@ -97,7 +93,7 @@ def load_market_data(trading_day=None, trading_days=None, bm_symbol='SPY',
     Load benchmark returns and treasury yield curves for the given calendar and
     benchmark symbol.
 
-    Benchmarks are downloaded as a Series from Yahoo Finance.  Treasury curves
+    Benchmarks are downloaded as a Series from Google Finance.  Treasury curves
     are US Treasury Bond rates and are downloaded from 'www.federalreserve.gov'
     by default.  For Canadian exchanges, a loader for Canadian bonds from the
     Bank of Canada is also available.
@@ -116,7 +112,7 @@ def load_market_data(trading_day=None, trading_days=None, bm_symbol='SPY',
         dates we should expect to have cached. Defaults to the NYSE calendar.
     bm_symbol : str, optional
         Symbol for the benchmark index to load.  Defaults to 'SPY', the Google
-        ticker for the SPDR S&P 500 ETF.
+        ticker for the S&P 500.
 
     Returns
     -------
@@ -215,7 +211,13 @@ def ensure_benchmark_data(symbol, first_date, last_date, now, trading_day,
 
     # If no cached data was found or it was missing any dates then download the
     # necessary data.
-    logger.info('Downloading benchmark data for {symbol!r}.', symbol=symbol)
+    logger.info(
+        ('Downloading benchmark data for {symbol!r} '
+            'from {first_date} to {last_date}'),
+        symbol=symbol,
+        first_date=first_date - trading_day,
+        last_date=last_date
+    )
 
     try:
         data = get_benchmark_returns(
@@ -225,10 +227,16 @@ def ensure_benchmark_data(symbol, first_date, last_date, now, trading_day,
         )
         data.to_csv(get_data_filepath(filename, environ))
     except (OSError, IOError, HTTPError):
-        logger.exception('failed to cache the new benchmark returns')
+        logger.exception('Failed to cache the new benchmark returns')
         raise
     if not has_data_for_dates(data, first_date, last_date):
-        logger.warn("Still don't have expected data after redownload!")
+        logger.warn(
+            ("Still don't have expected benchmark data for {symbol!r} "
+                "from {first_date} to {last_date} after redownload!"),
+            symbol=symbol,
+            first_date=first_date - trading_day,
+            last_date=last_date
+        )
     return data
 
 
@@ -271,7 +279,13 @@ def ensure_treasury_data(symbol, first_date, last_date, now, environ=None):
 
     # If no cached data was found or it was missing any dates then download the
     # necessary data.
-    logger.info('Downloading treasury data for {symbol!r}.', symbol=symbol)
+    logger.info(
+        ('Downloading treasury data for {symbol!r} '
+            'from {first_date} to {last_date}'),
+        symbol=symbol,
+        first_date=first_date,
+        last_date=last_date
+    )
 
     try:
         data = loader_module.get_treasury_data(first_date, last_date)
@@ -279,7 +293,13 @@ def ensure_treasury_data(symbol, first_date, last_date, now, environ=None):
     except (OSError, IOError, HTTPError):
         logger.exception('failed to cache treasury data')
     if not has_data_for_dates(data, first_date, last_date):
-        logger.warn("Still don't have expected data after redownload!")
+        logger.warn(
+            ("Still don't have expected treasury data for {symbol!r} "
+                "from {first_date} to {last_date} after redownload!"),
+            symbol=symbol,
+            first_date=first_date,
+            last_date=last_date
+        )
     return data
 
 
@@ -297,7 +317,8 @@ def _load_cached_data(filename, first_date, last_date, now, resource_name,
     # yet, so don't try to read from 'path'.
     if os.path.exists(path):
         try:
-            data = from_csv(path).tz_localize('UTC')
+            data = from_csv(path)
+            data.index = data.index.to_datetime().tz_localize('UTC')
             if has_data_for_dates(data, first_date, last_date):
                 return data
 
@@ -329,146 +350,6 @@ def _load_cached_data(filename, first_date, last_date, now, resource_name,
         path=path,
     )
     return None
-
-
-def _load_raw_yahoo_data(indexes=None, stocks=None, start=None, end=None):
-    """Load closing prices from yahoo finance.
-
-    :Optional:
-        indexes : dict (Default: {'SPX': 'SPY'})
-            Financial indexes to load.
-        stocks : list (Default: ['AAPL', 'GE', 'IBM', 'MSFT',
-                                 'XOM', 'AA', 'JNJ', 'PEP', 'KO'])
-            Stock closing prices to load.
-        start : datetime (Default: datetime(1993, 1, 1, 0, 0, 0, 0, pytz.utc))
-            Retrieve prices from start date on.
-        end : datetime (Default: datetime(2002, 1, 1, 0, 0, 0, 0, pytz.utc))
-            Retrieve prices until end date.
-
-    :Note:
-        This is based on code presented in a talk by Wes McKinney:
-        http://wesmckinney.com/files/20111017/notebook_output.pdf
-    """
-    assert indexes is not None or stocks is not None, """
-must specify stocks or indexes"""
-
-    if start is None:
-        start = pd.datetime(1990, 1, 1, 0, 0, 0, 0, pytz.utc)
-
-    if start is not None and end is not None:
-        assert start < end, "start date is later than end date."
-
-    data = OrderedDict()
-
-    if stocks is not None:
-        for stock in stocks:
-            logger.info('Loading stock: {}'.format(stock))
-            stock_pathsafe = stock.replace(os.path.sep, '--')
-            cache_filename = "{stock}-{start}-{end}.csv".format(
-                stock=stock_pathsafe,
-                start=start,
-                end=end).replace(':', '-')
-            cache_filepath = get_cache_filepath(cache_filename)
-            if os.path.exists(cache_filepath):
-                stkd = pd.DataFrame.from_csv(cache_filepath)
-            else:
-                stkd = DataReader(stock, 'yahoo', start, end).sort_index()
-                stkd.to_csv(cache_filepath)
-            data[stock] = stkd
-
-    if indexes is not None:
-        for name, ticker in iteritems(indexes):
-            logger.info('Loading index: {} ({})'.format(name, ticker))
-            stkd = DataReader(ticker, 'yahoo', start, end).sort_index()
-            data[name] = stkd
-
-    return data
-
-
-def load_from_yahoo(indexes=None,
-                    stocks=None,
-                    start=None,
-                    end=None,
-                    adjusted=True):
-    """
-    Loads price data from Yahoo into a dataframe for each of the indicated
-    assets.  By default, 'price' is taken from Yahoo's 'Adjusted Close',
-    which removes the impact of splits and dividends. If the argument
-    'adjusted' is False, then the non-adjusted 'close' field is used instead.
-
-    :param indexes: Financial indexes to load.
-    :type indexes: dict
-    :param stocks: Stock closing prices to load.
-    :type stocks: list
-    :param start: Retrieve prices from start date on.
-    :type start: datetime
-    :param end: Retrieve prices until end date.
-    :type end: datetime
-    :param adjusted: Adjust the price for splits and dividends.
-    :type adjusted: bool
-
-    """
-    data = _load_raw_yahoo_data(indexes, stocks, start, end)
-    if adjusted:
-        close_key = 'Adj Close'
-    else:
-        close_key = 'Close'
-    df = pd.DataFrame({key: d[close_key] for key, d in iteritems(data)})
-    df.index = df.index.tz_localize(pytz.utc)
-    return df
-
-
-@deprecated(
-    'load_bars_from_yahoo is deprecated, please register a'
-    ' yahoo_equities data bundle instead',
-)
-def load_bars_from_yahoo(indexes=None,
-                         stocks=None,
-                         start=None,
-                         end=None,
-                         adjusted=True):
-    """
-    Loads data from Yahoo into a panel with the following
-    column names for each indicated security:
-
-        - open
-        - high
-        - low
-        - close
-        - volume
-        - price
-
-    Note that 'price' is Yahoo's 'Adjusted Close', which removes the
-    impact of splits and dividends. If the argument 'adjusted' is True, then
-    the open, high, low, and close values are adjusted as well.
-
-    :param indexes: Financial indexes to load.
-    :type indexes: dict
-    :param stocks: Stock closing prices to load.
-    :type stocks: list
-    :param start: Retrieve prices from start date on.
-    :type start: datetime
-    :param end: Retrieve prices until end date.
-    :type end: datetime
-    :param adjusted: Adjust open/high/low/close for splits and dividends.
-        The 'price' field is always adjusted.
-    :type adjusted: bool
-
-    """
-    data = _load_raw_yahoo_data(indexes, stocks, start, end)
-    panel = pd.Panel(data)
-    # Rename columns
-    panel.minor_axis = ['open', 'high', 'low', 'close', 'volume', 'price']
-    panel.major_axis = panel.major_axis.tz_localize(pytz.utc)
-    # Adjust data
-    if adjusted:
-        adj_cols = ['open', 'high', 'low', 'close']
-        for ticker in panel.items:
-            ratio = (panel[ticker]['price'] / panel[ticker]['close'])
-            ratio_filtered = ratio.fillna(0).values
-            for col in adj_cols:
-                panel[ticker][col] *= ratio_filtered
-    return panel
 
 
 def load_prices_from_csv(filepath, identifier_col, tz='UTC'):
